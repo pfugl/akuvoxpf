@@ -421,16 +421,22 @@ class AkuvoxApiClient:
     async def async_retrieve_personal_door_log(self) -> bool:
         """Request and parse the user's door log.
 
-        Polls every 2 seconds while the API answers. While it keeps failing,
-        the interval backs off to at most 60 seconds and the failure is
-        logged once (with the reason) instead of on every poll.
+        Akuvox rate-limits this endpoint (HTTP 429 "Requesting too
+        frequently"). The poll interval therefore adapts: it starts at
+        2 seconds and every 429 permanently raises the normal interval
+        (up to 30 s), so the poller settles at the fastest rate Akuvox
+        accepts. While failing, retries back off to at most 120 s and the
+        failure is logged once (with the reason) instead of on every poll.
         """
-        min_interval = 2
-        max_interval = 60
-        interval = min_interval
+        base_interval = 2.0
+        max_base_interval = 30.0
+        max_interval = 120.0
+        interval = base_interval
         failing_since = None
         failures = 0
         while True:
+            self._last_status_code = None
+            self._last_retry_after = None
             try:
                 json_data = await self.async_get_personal_door_log()
             except asyncio.CancelledError:
@@ -441,11 +447,11 @@ class AkuvoxApiClient:
 
             if json_data is not None:
                 if failing_since is not None:
-                    LOGGER.warning("✅ Personal door log is available again after %s failed polls",
-                                   failures)
+                    LOGGER.warning("✅ Personal door log is available again after %s failed polls "
+                                   "(now polling every %.0f s)", failures, base_interval)
                 failing_since = None
                 failures = 0
-                interval = min_interval
+                interval = base_interval
                 new_door_log = await self._data.async_parse_personal_door_log(json_data)
                 if new_door_log is not None:
                     # Fire HA event
@@ -454,6 +460,7 @@ class AkuvoxApiClient:
                     self.hass.bus.async_fire(event_name, new_door_log)
             else:
                 failures += 1
+                first_failure = failing_since is None
                 if failing_since is None:
                     failing_since = asyncio.get_running_loop().time()
                     LOGGER.error("❌ Unable to retrieve user's personal door log (%s). "
@@ -464,7 +471,17 @@ class AkuvoxApiClient:
                     LOGGER.debug("Personal door log still unavailable (%s failures): %s",
                                  failures,
                                  getattr(self, "_door_log_failure_reason", "unknown reason"))
-                interval = min(max_interval, interval * 2)
+                if first_failure and getattr(self, "_last_status_code", None) == 429:
+                    # Too frequent: slow the normal pace down for good
+                    # (once per rate-limit episode, so it converges gently)
+                    new_base = min(max_base_interval, base_interval * 1.5)
+                    if new_base != base_interval:
+                        LOGGER.debug("Akuvox rate limit hit; normal door log poll interval "
+                                     "raised from %.0f s to %.0f s", base_interval, new_base)
+                    base_interval = new_base
+                retry_after = getattr(self, "_last_retry_after", None)
+                interval = min(max_interval, max(interval * 2, base_interval,
+                                                 retry_after or 0))
 
             await asyncio.sleep(interval)
 
@@ -610,9 +627,20 @@ class AkuvoxApiClient:
                 log = LOGGER.debug if url.endswith(API_GET_PERSONAL_DOOR_LOG) else LOGGER.error
                 log("❌ Error occurred when parsing JSON: %s\nRequest: %s", error, url)
         else:
+            self._last_status_code = response.status_code
+            self._last_retry_after = None
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    self._last_retry_after = float(retry_after) if retry_after else None
+                except ValueError:
+                    self._last_retry_after = None
+            limit_headers = {k: v for k, v in response.headers.items()
+                             if "ratelimit" in k.lower() or k.lower() == "retry-after"}
             self._last_response_problem = (
                 f"HTTP {response.status_code} from {url.split('?')[0]}; "
-                f"body starts with: {response.text[:200]!r}")
+                f"body starts with: {response.text[:200]!r}"
+                + (f"; headers: {limit_headers}" if limit_headers else ""))
             LOGGER.debug("❌ Error: HTTP status code = %s for request to %s",
                          response.status_code,
                          url)
