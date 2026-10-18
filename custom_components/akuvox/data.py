@@ -148,6 +148,15 @@ class AkuvoxData:
                 LOGGER.debug("Could not summarise userconf: %s", error)
             if "app_conf" in json_data:
                 self.project_name = json_data["app_conf"]["project_name"].strip()
+                # SIP account of the SmartPlus app (kept in memory only; used
+                # by the "Export SIP config" button, never logged)
+                app_conf = json_data["app_conf"]
+                self.sip_conf = {
+                    key: app_conf.get(key)
+                    for key in ("sip_server", "sip", "sip_passwd", "main_sip",
+                                "main_sip_passwd", "trans_type", "codec",
+                                "display_name", "rtp_confuse")
+                }
             if "dev_list" in json_data:
                 for dev_data in json_data["dev_list"]:
                     name = dev_data["location"].strip()
