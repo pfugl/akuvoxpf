@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import json
+from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -427,6 +428,7 @@ class AkuvoxApiClient:
     door_log_status_since = None
     door_log_poll_interval: float | None = None
     door_log_failures: int = 0
+    door_log_next_attempt = None
     last_door_event: dict | None = None
     last_door_event_time = None
 
@@ -451,6 +453,8 @@ class AkuvoxApiClient:
         base_interval = 2.0
         max_base_interval = 30.0
         max_interval = 120.0
+        rate_limit_margin = 15.0
+        max_rate_limit_wait = 7200.0
         interval = base_interval
         failing_since = None
         failures = 0
@@ -474,6 +478,7 @@ class AkuvoxApiClient:
                 interval = base_interval
                 self.door_log_failures = 0
                 self.door_log_poll_interval = base_interval
+                self.door_log_next_attempt = None
                 if self.door_log_status != "ok":
                     self._set_door_log_status("ok")
                 new_door_log = await self._data.async_parse_personal_door_log(json_data)
@@ -507,10 +512,15 @@ class AkuvoxApiClient:
                                      "raised from %.0f s to %.0f s", base_interval, new_base)
                     base_interval = new_base
                 retry_after = getattr(self, "_last_retry_after", None)
-                interval = min(max_interval, max(interval * 2, base_interval,
-                                                 retry_after or 0))
+                if retry_after:
+                    # Wait out the whole rate-limit window, then send exactly
+                    # one request just after it resets (no requests in between).
+                    interval = min(max_rate_limit_wait, retry_after + rate_limit_margin)
+                else:
+                    interval = min(max_interval, max(interval * 2, base_interval))
                 self.door_log_failures = failures
                 self.door_log_poll_interval = interval
+                self.door_log_next_attempt = dt_util.utcnow() + timedelta(seconds=interval)
                 self._set_door_log_status(
                     "rate_limited" if getattr(self, "_last_status_code", None) == 429 else "error",
                     getattr(self, "_door_log_failure_reason", "unknown reason"))
@@ -667,6 +677,13 @@ class AkuvoxApiClient:
                     self._last_retry_after = float(retry_after) if retry_after else None
                 except ValueError:
                     self._last_retry_after = None
+                # Akuvox sends X-RateLimit-Reset = seconds until the window resets
+                if self._last_retry_after is None:
+                    reset = response.headers.get("X-RateLimit-Reset")
+                    try:
+                        self._last_retry_after = float(reset) if reset else None
+                    except ValueError:
+                        self._last_retry_after = None
             limit_headers = {k: v for k, v in response.headers.items()
                              if "ratelimit" in k.lower() or k.lower() == "retry-after"}
             self._last_response_problem = (

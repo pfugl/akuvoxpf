@@ -214,6 +214,8 @@ class AkuvoxDoorLogStatusSensor(SensorEntity):
             "detail": getattr(self.client, "door_log_status_detail", None),
             "since": since.isoformat() if since else None,
             "poll_interval_seconds": getattr(self.client, "door_log_poll_interval", None),
+            "next_attempt": (lambda t: t.isoformat() if t else None)(
+                getattr(self.client, "door_log_next_attempt", None)),
             "failed_polls": getattr(self.client, "door_log_failures", 0),
         }
 
