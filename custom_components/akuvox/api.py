@@ -594,7 +594,8 @@ class AkuvoxApiClient:
                 subdomain = self._data.subdomain
                 url = url.replace("subdomain.", f"{subdomain}.")
                 if not url.endswith(API_GET_PERSONAL_DOOR_LOG):
-                    LOGGER.debug("⏳ Sending request to %s", url)
+                    # Never write the account token (query string) to the log
+                    LOGGER.debug("⏳ Sending request to %s", url.split("?")[0])
                 response = await self.hass.async_add_executor_job(func, url, headers, data, 10)
                 return self.process_response(response, url)
 
