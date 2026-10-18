@@ -6,6 +6,8 @@ import socket
 import json
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 
 import aiohttp
 import async_timeout
@@ -16,6 +18,7 @@ from .door_poll import DoorLogPoller
 
 from .const import (
     LOGGER,
+    SIGNAL_DOOR_LOG_UPDATE,
     REST_SERVER_ADDR,
     REST_SERVER_PORT,
     API_SEND_SMS,
@@ -418,6 +421,23 @@ class AkuvoxApiClient:
         # Make sure only 1 instance of the door log polling is running
         await self.async_start_polling()
 
+    # Door log status, exposed to Home Assistant by the door log sensors
+    door_log_status: str = "starting"
+    door_log_status_detail: str | None = None
+    door_log_status_since = None
+    door_log_poll_interval: float | None = None
+    door_log_failures: int = 0
+    last_door_event: dict | None = None
+    last_door_event_time = None
+
+    def _set_door_log_status(self, status: str, detail: str | None = None) -> None:
+        """Update the door log status and notify the sensors."""
+        if status != self.door_log_status:
+            self.door_log_status_since = dt_util.utcnow()
+        self.door_log_status = status
+        self.door_log_status_detail = detail
+        async_dispatcher_send(self.hass, SIGNAL_DOOR_LOG_UPDATE)
+
     async def async_retrieve_personal_door_log(self) -> bool:
         """Request and parse the user's door log.
 
@@ -452,12 +472,19 @@ class AkuvoxApiClient:
                 failing_since = None
                 failures = 0
                 interval = base_interval
+                self.door_log_failures = 0
+                self.door_log_poll_interval = base_interval
+                if self.door_log_status != "ok":
+                    self._set_door_log_status("ok")
                 new_door_log = await self._data.async_parse_personal_door_log(json_data)
                 if new_door_log is not None:
                     # Fire HA event
                     LOGGER.debug("🚪 New door open event occurred. Firing akuvox_door_update event")
                     event_name = "akuvox_door_update"
                     self.hass.bus.async_fire(event_name, new_door_log)
+                    self.last_door_event = dict(new_door_log)
+                    self.last_door_event_time = dt_util.utcnow()
+                    async_dispatcher_send(self.hass, SIGNAL_DOOR_LOG_UPDATE)
             else:
                 failures += 1
                 first_failure = failing_since is None
@@ -482,6 +509,11 @@ class AkuvoxApiClient:
                 retry_after = getattr(self, "_last_retry_after", None)
                 interval = min(max_interval, max(interval * 2, base_interval,
                                                  retry_after or 0))
+                self.door_log_failures = failures
+                self.door_log_poll_interval = interval
+                self._set_door_log_status(
+                    "rate_limited" if getattr(self, "_last_status_code", None) == 429 else "error",
+                    getattr(self, "_door_log_failure_reason", "unknown reason"))
 
             await asyncio.sleep(interval)
 

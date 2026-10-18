@@ -1,6 +1,14 @@
 """Sensor platform for akuvox."""
 from datetime import datetime
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+)
+from homeassistant.core import callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers import storage
 from homeassistant.helpers.entity import DeviceInfo
 
@@ -11,7 +19,9 @@ from .const import (
     LOGGER,
     NAME,
     VERSION,
-    DATA_STORAGE_KEY
+    DATA_STORAGE_KEY,
+    DOOR_LOG_STATUS_OPTIONS,
+    SIGNAL_DOOR_LOG_UPDATE,
 )
 from .entity import AkuvoxEntity
 
@@ -48,9 +58,12 @@ async def async_setup_entry(hass, entry, async_add_devices):
     client = coordinator.client
     store = storage.Store(hass, 1, DATA_STORAGE_KEY)
     device_data: dict = await store.async_load() # type: ignore
-    door_keys_data = device_data.get("door_keys_data") or []
+    door_keys_data = (device_data or {}).get("door_keys_data") or []
 
-    entities = []
+    entities = [
+        AkuvoxDoorLogStatusSensor(client=client, entry=entry),
+        AkuvoxLastDoorEventSensor(client=client, entry=entry),
+    ]
     for door_key_data in door_keys_data:
         key_id = door_key_data["key_id"]
         description = door_key_data["description"]
@@ -149,3 +162,112 @@ class AkuvoxTemporaryDoorKey(SensorEntity, AkuvoxEntity):
             'qr_code_url': self.qr_code_url,
             'expired': not self.is_key_active()
         }
+
+
+def _door_log_device_info(entry) -> DeviceInfo:
+    """Device that groups the door log sensors."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{entry.entry_id}_door_log")},  # type: ignore
+        name="Akuvox door log",
+        model=VERSION,
+        manufacturer=NAME,
+    )
+
+
+class AkuvoxDoorLogStatusSensor(SensorEntity):
+    """Shows whether door bell / door open events can be received."""
+
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = DOOR_LOG_STATUS_OPTIONS
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:doorbell"
+
+    def __init__(self, client: AkuvoxApiClient, entry) -> None:
+        """Initialize the door log status sensor."""
+        self.client = client
+        self._attr_name = "Akuvox door log status"
+        self._attr_unique_id = f"{entry.entry_id}_door_log_status"
+        self._attr_device_info = _door_log_device_info(entry)
+
+    async def async_added_to_hass(self) -> None:
+        """Listen for door log updates."""
+        self.async_on_remove(async_dispatcher_connect(
+            self.hass, SIGNAL_DOOR_LOG_UPDATE, self._handle_update))
+
+    @callback
+    def _handle_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self):
+        """Current door log status."""
+        status = getattr(self.client, "door_log_status", "starting")
+        return status if status in DOOR_LOG_STATUS_OPTIONS else "error"
+
+    @property
+    def extra_state_attributes(self):
+        """Details about the door log polling."""
+        since = getattr(self.client, "door_log_status_since", None)
+        return {
+            "detail": getattr(self.client, "door_log_status_detail", None),
+            "since": since.isoformat() if since else None,
+            "poll_interval_seconds": getattr(self.client, "door_log_poll_interval", None),
+            "failed_polls": getattr(self.client, "door_log_failures", 0),
+        }
+
+
+class AkuvoxLastDoorEventSensor(RestoreSensor):
+    """The most recent door bell / door open event."""
+
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:door"
+
+    EVENT_KEYS = {
+        "CaptureType": "type",
+        "Initiator": "initiator",
+        "Location": "location",
+        "RelayName": "relay",
+        "CaptureTime": "capture_time",
+        "PicUrl": "picture_url",
+    }
+
+    def __init__(self, client: AkuvoxApiClient, entry) -> None:
+        """Initialize the last door event sensor."""
+        self.client = client
+        self._attr_name = "Akuvox last door event"
+        self._attr_unique_id = f"{entry.entry_id}_last_door_event"
+        self._attr_device_info = _door_log_device_info(entry)
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {}
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the previous event and listen for new ones."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in ("unknown", "unavailable"):
+            self._attr_native_value = dt_util.parse_datetime(last_state.state)
+            self._attr_extra_state_attributes = {
+                key: last_state.attributes.get(key)
+                for key in self.EVENT_KEYS.values()
+                if key in last_state.attributes
+            }
+        self.async_on_remove(async_dispatcher_connect(
+            self.hass, SIGNAL_DOOR_LOG_UPDATE, self._handle_update))
+
+    @callback
+    def _handle_update(self) -> None:
+        event = getattr(self.client, "last_door_event", None)
+        event_time = getattr(self.client, "last_door_event_time", None)
+        if not event or event_time is None or event_time == self._attr_native_value:
+            return
+        self._attr_native_value = event_time
+        self._attr_extra_state_attributes = {
+            name: event.get(key) for key, name in self.EVENT_KEYS.items() if key in event
+        }
+        if self._attr_extra_state_attributes.get("picture_url"):
+            self._attr_entity_picture = self._attr_extra_state_attributes["picture_url"]
+        self.async_write_ha_state()

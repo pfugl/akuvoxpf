@@ -477,3 +477,7 @@ DATA_STORAGE_KEY = "akuvox_data_storage_key"
 
 CAPTURE_TIME_KEY = "CaptureTime"
 PIC_URL_KEY = "PicUrl"
+
+# Dispatcher signal sent when the door log status or last door event changes
+SIGNAL_DOOR_LOG_UPDATE = "akuvox_door_log_update"
+DOOR_LOG_STATUS_OPTIONS = ["starting", "ok", "rate_limited", "error"]
