@@ -127,7 +127,7 @@ def _build_ha_sip_config(sip_conf: dict, webhook_id: str) -> tuple[str, str]:
             f"  answer_mode: listen\n"
             f"  settle_time: 1\n"
             f"  incoming_call_file: ''\n"
-            f"  options: '--use-contact-rewrite --use-via-rewrite --use-sdp-nat-rewrite'\n"
+            f"  options: '--use-contact-rewrite enabled --use-via-rewrite enabled --use-sdp-nat-rewrite enabled'\n"
         )
 
     same = (str(sip_conf.get("sip")) == str(sip_conf.get("main_sip"))
@@ -145,7 +145,7 @@ def _build_ha_sip_config(sip_conf: dict, webhook_id: str) -> tuple[str, str]:
         "  port: 5060\n"
         "  log_level: 5\n"
         "  name_server: ''\n"
-        "  cache_dir: /config/audio_cache\n"
+        "  cache_dir: ''\n"
         f"  global_options: '--udp enabled --tcp enabled --tls {tls}'\n"
         "sip:\n" + account(sip_conf.get("sip"), sip_conf.get("sip_passwd"), True)
         + "sip_2:\n" + account(sip_conf.get("main_sip"), sip_conf.get("main_sip_passwd"), False)
