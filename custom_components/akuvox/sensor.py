@@ -15,6 +15,31 @@ from .const import (
 )
 from .entity import AkuvoxEntity
 
+# Akuvox has returned temporary key dates in several formats depending on
+# region and server version, e.g. "18-06-2026 10:29:57",
+# "2026-06-18 10:29:57" and "06-18-2026 10:29:57 AM".
+AKUVOX_DATE_FORMATS = (
+    "%d-%m-%Y %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%m-%d-%Y %I:%M:%S %p",
+    "%d-%m-%Y %I:%M:%S %p",
+    "%Y-%m-%d %I:%M:%S %p",
+    "%d/%m/%Y %H:%M:%S",
+    "%m/%d/%Y %I:%M:%S %p",
+)
+
+
+def parse_akuvox_datetime(value) -> datetime | None:
+    """Parse a date string from the Akuvox API, trying all known formats."""
+    text = str(value).strip()
+    for date_format in AKUVOX_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, date_format)
+        except ValueError:
+            continue
+    return None
+
 async def async_setup_entry(hass, entry, async_add_devices):
     """Set up the temporary door key platform."""
     coordinator: AkuvoxDataUpdateCoordinator
@@ -23,16 +48,19 @@ async def async_setup_entry(hass, entry, async_add_devices):
     client = coordinator.client
     store = storage.Store(hass, 1, DATA_STORAGE_KEY)
     device_data: dict = await store.async_load() # type: ignore
-    door_keys_data = device_data["door_keys_data"]
-    date_format = "%d-%m-%Y %H:%M:%S"
+    door_keys_data = device_data.get("door_keys_data") or []
 
     entities = []
     for door_key_data in door_keys_data:
         key_id = door_key_data["key_id"]
         description = door_key_data["description"]
         key_code=door_key_data["key_code"]
-        begin_time = datetime.strptime(str(door_key_data["begin_time"]), date_format)
-        end_time = datetime.strptime(str(door_key_data["end_time"]), date_format)
+        begin_time = parse_akuvox_datetime(door_key_data["begin_time"])
+        end_time = parse_akuvox_datetime(door_key_data["end_time"])
+        if begin_time is None or end_time is None:
+            LOGGER.warning("Skipping temporary key '%s': unrecognised date format (%s / %s)",
+                           key_id, door_key_data["begin_time"], door_key_data["end_time"])
+            continue
         allowed_times=door_key_data["allowed_times"]
         access_times=door_key_data["access_times"]
         qr_code_url=door_key_data["qr_code_url"]

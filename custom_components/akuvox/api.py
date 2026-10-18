@@ -95,6 +95,8 @@ class AkuvoxApiClient:
 
     async def async_start_polling(self):
         """Start polling the personal door log API."""
+        # Never run two pollers at once
+        await self.async_stop_polling()
         self.door_log_poller: DoorLogPoller = DoorLogPoller(
             hass=self.hass,
             poll_function=self.async_retrieve_personal_door_log)
@@ -102,7 +104,9 @@ class AkuvoxApiClient:
 
     async def async_stop_polling(self):
         """Stop polling the personal door log API."""
-        await self.door_log_poller.async_stop()
+        poller = getattr(self, "door_log_poller", None)
+        if poller is not None:
+            await poller.async_stop()
 
     def init_api_with_data(self,
                            hass: HomeAssistant,
@@ -412,25 +416,62 @@ class AkuvoxApiClient:
     async def async_start_polling_personal_door_log(self):
         """Poll the server contineously for the latest personal door log."""
         # Make sure only 1 instance of the door log polling is running
-        self.hass.async_create_task(self.async_retrieve_personal_door_log())
+        await self.async_start_polling()
 
     async def async_retrieve_personal_door_log(self) -> bool:
-        """Request and parse the user's door log every 2 seconds."""
+        """Request and parse the user's door log.
+
+        Polls every 2 seconds while the API answers. While it keeps failing,
+        the interval backs off to at most 60 seconds and the failure is
+        logged once (with the reason) instead of on every poll.
+        """
+        min_interval = 2
+        max_interval = 60
+        interval = min_interval
+        failing_since = None
+        failures = 0
         while True:
-            # Get the latest pesonal door log
-            json_data = await self.async_get_personal_door_log()
+            try:
+                json_data = await self.async_get_personal_door_log()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # pylint: disable=broad-except
+                self._door_log_failure_reason = f"request error: {error}"
+                json_data = None
+
             if json_data is not None:
+                if failing_since is not None:
+                    LOGGER.warning("✅ Personal door log is available again after %s failed polls",
+                                   failures)
+                failing_since = None
+                failures = 0
+                interval = min_interval
                 new_door_log = await self._data.async_parse_personal_door_log(json_data)
                 if new_door_log is not None:
                     # Fire HA event
                     LOGGER.debug("🚪 New door open event occurred. Firing akuvox_door_update event")
                     event_name = "akuvox_door_update"
                     self.hass.bus.async_fire(event_name, new_door_log)
-            await asyncio.sleep(2)  # Wait for 2 seconds before calling again
+            else:
+                failures += 1
+                if failing_since is None:
+                    failing_since = asyncio.get_running_loop().time()
+                    LOGGER.error("❌ Unable to retrieve user's personal door log (%s). "
+                                 "Door bell / door open events will not fire. "
+                                 "Retrying with back-off; this is logged once.",
+                                 getattr(self, "_door_log_failure_reason", "unknown reason"))
+                else:
+                    LOGGER.debug("Personal door log still unavailable (%s failures): %s",
+                                 failures,
+                                 getattr(self, "_door_log_failure_reason", "unknown reason"))
+                interval = min(max_interval, interval * 2)
+
+            await asyncio.sleep(interval)
 
     async def async_get_personal_door_log(self):
         """Request the user's personal door log data."""
         # LOGGER.debug("📡 Retrieving list of user's personal door log...")
+        self._door_log_failure_reason = "unknown reason"
         host = self.get_activities_host()
         url = f"https://{host}/{API_GET_PERSONAL_DOOR_LOG}"
         data = {}
@@ -465,7 +506,15 @@ class AkuvoxApiClient:
         if json_data is not None and len(json_data) > 0:
             return json_data
 
-        LOGGER.error("❌ Unable to retrieve user's personal door log")
+        if json_data is not None:
+            # Both the "single" and "community" endpoints answered OK but
+            # returned no entries.
+            self._door_log_failure_reason = (
+                "API answered OK but returned an empty door log on both the "
+                "'single' and 'community' endpoints")
+        else:
+            self._door_log_failure_reason = getattr(
+                self, "_last_response_problem", "no valid response")
         return None
 
     ###################
@@ -549,12 +598,21 @@ class AkuvoxApiClient:
                         return json_data
                     return []
 
-                LOGGER.warning("🤨 Response: %s", str(json_data))
+                self._last_response_problem = f"unexpected API response: {str(json_data)[:300]}"
+                if url.endswith(API_GET_PERSONAL_DOOR_LOG):
+                    # Reported once by the door log poller instead of every poll
+                    LOGGER.debug("🤨 Response: %s", str(json_data))
+                else:
+                    LOGGER.warning("🤨 Response: %s", str(json_data))
             except Exception as error:
-                LOGGER.error("❌ Error occurred when parsing JSON: %s\nRequest: %s",
-                             error,
-                             url)
+                self._last_response_problem = (
+                    f"invalid JSON ({error}); body starts with: {response.text[:200]!r}")
+                log = LOGGER.debug if url.endswith(API_GET_PERSONAL_DOOR_LOG) else LOGGER.error
+                log("❌ Error occurred when parsing JSON: %s\nRequest: %s", error, url)
         else:
+            self._last_response_problem = (
+                f"HTTP {response.status_code} from {url.split('?')[0]}; "
+                f"body starts with: {response.text[:200]!r}")
             LOGGER.debug("❌ Error: HTTP status code = %s for request to %s",
                          response.status_code,
                          url)

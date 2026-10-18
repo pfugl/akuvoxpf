@@ -34,6 +34,7 @@ class AkuvoxDataUpdateCoordinator(DataUpdateCoordinator):
         self,
         hass: HomeAssistant,
         client: AkuvoxApiClient,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         """Initialize."""
         self.client = client
@@ -42,6 +43,7 @@ class AkuvoxDataUpdateCoordinator(DataUpdateCoordinator):
             logger=LOGGER,
             name=DOMAIN,
             update_interval=None,
+            config_entry=config_entry,
         )
 
     async def _async_update_data(self):

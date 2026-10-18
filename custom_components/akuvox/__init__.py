@@ -35,6 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass=hass,
             entry=entry,
         ),
+        config_entry=entry,
     )
     await async_update_configuration(hass=hass, entry=entry)
 
@@ -56,30 +57,30 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_stop_polling(hass)
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
-    await async_update_configuration(hass, entry)
-    await async_start_polling(hass)
+    """Reload config entry (e.g. after the options were changed)."""
+    # Let Home Assistant run unload + setup in the correct context.
+    await hass.config_entries.async_reload(entry.entry_id)
 
 # Polling
 
 async def async_stop_polling(hass: HomeAssistant):
     """Stop polling the personal door log API."""
-    api_client: AkuvoxApiClient = get_api_client(hass=hass) # type: ignore
-    await api_client.async_stop_polling()
+    api_client: AkuvoxApiClient | None = get_api_client(hass=hass)
+    if api_client is not None:
+        await api_client.async_stop_polling()
 
 async def async_start_polling(hass: HomeAssistant):
-    """Stop polling the personal door log API."""
-    api_client: AkuvoxApiClient = get_api_client(hass=hass) # type: ignore
-    await api_client.async_start_polling_personal_door_log()
+    """Start polling the personal door log API."""
+    api_client: AkuvoxApiClient | None = get_api_client(hass=hass)
+    if api_client is not None:
+        await api_client.async_start_polling_personal_door_log()
 
 def get_api_client(hass: HomeAssistant):
     """Akuvox API Client."""
-    for _key, value in hass.data[DOMAIN].items():
+    for _key, value in hass.data.get(DOMAIN, {}).items():
         coordinator: AkuvoxDataUpdateCoordinator = value
         return coordinator.client
+    return None
 
 # Integration options
 
