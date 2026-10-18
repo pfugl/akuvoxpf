@@ -19,6 +19,27 @@ from .helpers import AkuvoxHelpers
 helpers = AkuvoxHelpers()
 
 # @dataclass
+def _redacted_structure(value, depth: int = 0):
+    """Describe a JSON value's shape without revealing any values.
+
+    Dicts keep their keys; lists show their first item's shape and length;
+    scalars become '<type len=N>' so secrets never reach the log.
+    """
+    if depth > 6:
+        return "…"
+    if isinstance(value, dict):
+        return {key: _redacted_structure(val, depth + 1) for key, val in value.items()}
+    if isinstance(value, list):
+        if not value:
+            return []
+        return [_redacted_structure(value[0], depth + 1), f"…{len(value)} items"]
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "<bool>"
+    return f"<{type(value).__name__} len={len(str(value))}>"
+
+
 class AkuvoxData:
     """Data class holding key data from API requests."""
 
@@ -118,6 +139,13 @@ class AkuvoxData:
         self.door_relay_data = []
         self.camera_data = []
         if json_data is not None:
+            # Diagnostic: log the userconf structure once, with all values
+            # redacted, to find out which fields (e.g. SIP account) exist.
+            try:
+                LOGGER.warning("🔎 userconf structure (values redacted): %s",
+                               _redacted_structure(json_data))
+            except Exception as error:  # pylint: disable=broad-except
+                LOGGER.debug("Could not summarise userconf: %s", error)
             if "app_conf" in json_data:
                 self.project_name = json_data["app_conf"]["project_name"].strip()
             if "dev_list" in json_data:
