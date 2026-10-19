@@ -55,7 +55,7 @@ class AkuvoxFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=["sms_sign_in_warning", "app_tokens_sign_in"],
+            menu_options=["password_sign_in", "sms_sign_in_warning", "app_tokens_sign_in"],
             description_placeholders=user_input,
         )
 
@@ -239,6 +239,55 @@ class AkuvoxFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(data_schema),
             description_placeholders=user_input,
             last_step=True,
+        )
+
+    async def async_step_password_sign_in(self, user_input=None):
+        """Step 1d: Sign in with the SmartPlus account's email and password."""
+        errors = {}
+        user_input_safe = {k: v for k, v in (user_input or {}).items() if k != "password"}
+        if user_input is not None:
+            email: str = user_input.get("email", "").strip()
+            password: str = user_input.get("password", "")
+            subdomain: str = user_input.get("subdomain", "Default")
+            if subdomain == "Default":
+                country_code = COUNTRY_PHONE.get(self.hass.config.country, "")
+                subdomain = helpers.get_subdomain_from_country_code(country_code) or "ecloud"
+            if email and password:
+                passwd_hash = AkuvoxApiClient.hash_password(password)
+                if await self.akuvox_api_client.async_password_sign_in(email, passwd_hash, subdomain):
+                    self.data = {
+                        "email": email,
+                        "passwd_hash": passwd_hash,
+                        "phone_number": "",
+                        "country_code": COUNTRY_PHONE.get(self.hass.config.country, ""),
+                        "subdomain": subdomain,
+                    }
+                    self.data.update(self.akuvox_api_client.get_devices_json())
+                    return self.async_create_entry(
+                        title=self.akuvox_api_client.get_title(),
+                        data=self.data
+                    )
+                errors["base"] = "Sign in failed. Check email and password (see the log for details)."
+            else:
+                errors["base"] = "Please enter both email and password."
+
+        data_schema = {
+            vol.Required("email", default=user_input_safe.get("email", "")): str,
+            vol.Required("password"): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),
+            vol.Optional("subdomain", default=user_input_safe.get("subdomain", "Default")):
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=SUBDOMAINS_LIST,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        custom_value=True),
+                ),
+        }
+        return self.async_show_form(
+            step_id="password_sign_in",
+            data_schema=vol.Schema(data_schema),
+            last_step=True,
+            errors=errors,
         )
 
     async def async_step_verify_sms_code(self, user_input=None):

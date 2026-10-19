@@ -14,5 +14,5 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/pfugl/akuvoxpf/issues",
-  "version": "v0.2.0-beta3-pf.1"
+  "version": "v0.2.0-beta3-pf.2"
 }

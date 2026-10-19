@@ -5,8 +5,9 @@
                 "title": "Akuvox SmartPlus Sign-In",
                 "description": "Choose a sign-in method to connect to your Akuvox SmartPlus account:",
                 "menu_options": {
-                    "sms_sign_in_warning": "1. SMS Verification (Recommended)",
-                    "app_tokens_sign_in": "2. App Tokens (Advanced)"
+                    "password_sign_in": "1. Email & password",
+                    "sms_sign_in_warning": "2. SMS Verification",
+                    "app_tokens_sign_in": "3. App Tokens (Advanced)"
                 }
             },
             "sms_sign_in_warning": {
@@ -41,6 +42,15 @@
                 },
                 "data_description": {
                     "sms_code": "It may take up to 60 seconds to receive the SMS."
+                }
+            },
+            "password_sign_in": {
+                "title": "Sign in with email & password",
+                "description": "Use the email and password of a SmartPlus account (e.g. a family member created for Home Assistant). Only a hash of the password is stored.",
+                "data": {
+                    "email": "Email",
+                    "password": "Password",
+                    "subdomain": "Manually set the regional API subdomain"
                 }
             }
         }

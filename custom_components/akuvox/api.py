@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import socket
 import json
+import hashlib
+import urllib.parse
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
@@ -25,6 +27,9 @@ from .const import (
     API_SEND_SMS,
     SMS_LOGIN_API_VERSION,
     API_SMS_LOGIN,
+    API_PASSWORD_LOGIN,
+    PASSWORD_LOGIN_API_VERSION,
+    PASSWORD_LOGIN_USER_AGENT,
     API_SERVERS_LIST,
     REST_SERVER_API_VERSION,
     API_REST_SERVER_DATA,
@@ -308,6 +313,95 @@ class AkuvoxApiClient:
         LOGGER.error("❌ Unable to log in with SMS code.")
         return None
 
+    ###########################
+    # Email / password sign-in #
+    ###########################
+
+    @staticmethod
+    def obfuscate_email(email: str) -> str:
+        """SmartPlus sends the account name with every letter shifted 3 places (ROT3)."""
+        out = []
+        for char in email.strip():
+            if "a" <= char <= "z":
+                out.append(chr((ord(char) - 97 + 3) % 26 + 97))
+            elif "A" <= char <= "Z":
+                out.append(chr((ord(char) - 65 + 3) % 26 + 65))
+            else:
+                out.append(char)
+        return "".join(out)
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """SmartPlus sends md5(md5(password)) as lowercase hex."""
+        first = hashlib.md5(password.encode("utf-8")).hexdigest()
+        return hashlib.md5(first.encode("utf-8")).hexdigest()
+
+    async def async_password_login(self, email: str, passwd_hash: str):
+        """Log in with email + hashed password. Returns the login response or None."""
+        LOGGER.debug("📡 Logging in user with email and password...")
+        # Same raw format as the app: user=...&passwd=...&id_code=(null)
+        user = urllib.parse.quote(self.obfuscate_email(email), safe="@.+-_")
+        params = f"user={user}&passwd={passwd_hash}&id_code=(null)"
+        url = f"https://{REST_SERVER_ADDR}:{REST_SERVER_PORT}/{API_PASSWORD_LOGIN}?{params}"
+        headers = {
+            "accept": "*/*",
+            "x-auth-token": "",
+            "api-version": PASSWORD_LOGIN_API_VERSION,
+            "user-agent": PASSWORD_LOGIN_USER_AGENT,
+            "accept-language": "da-DK;q=1",
+        }
+        try:
+            response = await self._async_api_wrapper(method="get", url=url, headers=headers, data=None)
+        except AkuvoxApiClientError as error:
+            LOGGER.error("❌ Email/password login request failed: %s", str(error).split("?")[0])
+            return None
+        if response:
+            LOGGER.info("✅ Email/password login successful (response keys: %s)",
+                        sorted(response.keys()) if isinstance(response, dict) else type(response).__name__)
+            return response
+        LOGGER.error("❌ Unable to log in with email and password: %s",
+                     getattr(self, "_last_response_problem", "unknown reason"))
+        return None
+
+    async def async_password_sign_in(self, email: str, passwd_hash: str, subdomain: str = "ecloud") -> bool:
+        """Sign in with email/password and load the account's devices."""
+        self.init_api_with_data(hass=self.hass, subdomain=subdomain, phone_number="")
+        if subdomain:
+            self._data.subdomain = subdomain
+        if not self._data.host or self._data.host == "...request in process":
+            self._data.host = None # type: ignore
+            await self.async_fetch_rest_server()
+        login_data = await self.async_password_login(email, passwd_hash)
+        if login_data is None or not isinstance(login_data, dict):
+            return False
+        self._data.email = email
+        self._data.passwd_hash = passwd_hash
+        self._data.parse_sms_login_response(login_data) # type: ignore
+        if not self._data.token:
+            LOGGER.error("❌ Login response did not contain a token (keys: %s)", sorted(login_data.keys()))
+            return False
+        # servers_list gives the rest/rtsp hosts for this token
+        await self.async_make_servers_list_request(
+            hass=self.hass,
+            auth_token=self._data.auth_token,
+            token=self._data.token,
+            country_code=self.hass.config.country,
+            phone_number=self._data.phone_number or "")
+        await self.async_retrieve_device_data()
+        await self.async_retrieve_temp_keys_data()
+        return True
+
+    async def async_relogin_with_password(self) -> bool:
+        """Get fresh tokens using the stored email/password hash, if available."""
+        if not (self._data and self._data.email and self._data.passwd_hash):
+            return False
+        LOGGER.info("🔑 Tokens rejected – logging in again with email/password")
+        login_data = await self.async_password_login(self._data.email, self._data.passwd_hash)
+        if not isinstance(login_data, dict):
+            return False
+        self._data.parse_sms_login_response(login_data) # type: ignore
+        return bool(self._data.token)
+
     async def async_retrieve_user_data(self) -> bool:
         """Retrieve user devices and temp keys data."""
         if await self.async_make_servers_list_request(
@@ -319,6 +413,17 @@ class AkuvoxApiClient:
             await self.async_retrieve_device_data()
             await self.async_retrieve_temp_keys_data()
             return True
+        # Email/password accounts can renew their own tokens
+        if await self.async_relogin_with_password():
+            if await self.async_make_servers_list_request(
+                hass=self.hass,
+                auth_token=self._data.auth_token,
+                token=self._data.token,
+                country_code=self.hass.config.country,
+                phone_number=self._data.phone_number or ""):
+                await self.async_retrieve_device_data()
+                await self.async_retrieve_temp_keys_data()
+                return True
         return False
 
     async def async_retrieve_device_data(self) -> bool:

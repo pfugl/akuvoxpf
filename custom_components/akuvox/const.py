@@ -461,6 +461,8 @@ COUNTRY_PHONE: dict = {
 
 
 SMS_LOGIN_API_VERSION = "6.6"
+PASSWORD_LOGIN_API_VERSION = "7.33"
+PASSWORD_LOGIN_USER_AGENT = "VBell/7.51.3 (iPhone; iOS 27.0; Scale/3.00)"
 REST_SERVER_API_VERSION = "6.0"
 OPENDOOR_API_VERSION = "4.3"
 USERCONF_API_VERSION = "6.5"
@@ -471,6 +473,7 @@ API_REST_SERVER_DATA = "rest_server"
 API_SEND_SMS = "send_mobile_checkcode"
 API_SERVERS_LIST = "servers_list"
 API_SMS_LOGIN = "sms_login"
+API_PASSWORD_LOGIN = "login"
 API_USERCONF = "userconf"
 API_OPENDOOR = "opendoor"
 

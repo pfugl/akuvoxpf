@@ -51,6 +51,8 @@ class AkuvoxData:
     auth_token: str = ""
     token: str = ""
     phone_number: str = ""
+    email: str = ""
+    passwd_hash: str = ""
     wait_for_image_url: bool = False
     rtsp_ip: str = ""
     project_name: str = ""
@@ -76,6 +78,9 @@ class AkuvoxData:
         self.auth_token = auth_token if auth_token else self.get_value_for_key(entry, "auth_token", self.host) # type: ignore
         self.token = token if token else self.get_value_for_key(entry, "token", self.token) # type: ignore
         self.phone_number = phone_number if phone_number else self.get_value_for_key(entry, "phone_number", self.phone_number) # type: ignore
+        # Email/password sign-in (only the double-MD5 hash is stored)
+        self.email = self.get_value_for_key(entry, "email", "") or "" # type: ignore
+        self.passwd_hash = self.get_value_for_key(entry, "passwd_hash", "") or "" # type: ignore
         self.wait_for_image_url = wait_for_image_url if wait_for_image_url is not None else bool(self.get_value_for_key(entry, "event_screenshot_options", False) == "wait") # type: ignore
 
         self.subdomain = subdomain if subdomain else self.get_value_for_key(entry, "subdomain", self.subdomain) # type: ignore
