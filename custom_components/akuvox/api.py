@@ -165,9 +165,15 @@ class AkuvoxApiClient:
             subdomain=subdomain,
             country_code=country_code,
             phone_number=phone_number)
+        # The REST host must be known before the URL can be built. Sending an
+        # SMS only needs the REST host (no tokens exist yet), so fetch just
+        # that instead of the full API init, which needs a logged-in account.
+        if not self._data.host or self._data.host == "...request in process":
+            self._data.host = None
+            await self.async_fetch_rest_server()
         url = f"https://{self._data.host}/{API_SEND_SMS}".replace(".subdomain", f".{subdomain}")
         LOGGER.debug("url = %s", url)
-        if await self.async_init_api():
+        if self._data.host:
             headers = {
                 "Host": self._data.host,
                 "Content-Type": "application/x-www-form-urlencoded",
