@@ -33,6 +33,12 @@ SUBDOMAINS_LIST: list = [
 ]
 
 LOCATIONS_DICT = {
+    "DK": {
+        "country": "Denmark",
+        "phone_number": "45",
+        "flag": "🇩🇰",
+        "subdomain": "ecloud"
+    },
     "AR": {
         "country": "Argentina",
         "phone_number": "54",
@@ -391,6 +397,7 @@ LOCATIONS_DICT = {
 }
 
 COUNTRY_PHONE: dict = {
+    "DK": "45",
     "AZ": "994",
     "BH": "973",
     "BY": "375",
